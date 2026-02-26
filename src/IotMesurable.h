@@ -173,6 +173,15 @@ public:
    */
   void publishStatusNow();
 
+  /**
+   * @brief Publish announce message (auto-discovery)
+   *
+   * Publishes a retained message to mesurable/{chipId}/announce with
+   * the module type, firmware version, and registered hardware/sensors.
+   * Called automatically on MQTT connect and every 5 minutes.
+   */
+  void publishAnnounce();
+
   // =========================================================================
   // Main Loop
   // =========================================================================
@@ -260,11 +269,15 @@ private:
   unsigned long _lastStatusPublish;
   unsigned long _lastSystemPublish;
   unsigned long _lastConfigPublish;
+  unsigned long _lastAnnouncePublish;
+  bool _announcePublished;
   static const unsigned long STATUS_INTERVAL = 5000;
   static const unsigned long SYSTEM_INTERVAL =
       30000; // Publish system info every 30s
   static const unsigned long CONFIG_INTERVAL =
       60000; // Publish sensors config every 60s
+  static const unsigned long ANNOUNCE_INTERVAL =
+      300000; // Re-publish announce every 5 minutes
 
   void publishStatus();
   void publishConfig();

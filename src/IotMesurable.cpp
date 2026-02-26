@@ -8,10 +8,8 @@
 #include "core/MqttClient.h"
 #include "core/SensorRegistry.h"
 
-
 #include <cstdio>
 #include <cstring>
-
 
 #ifndef NATIVE_BUILD
 #include <ArduinoJson.h>
@@ -30,7 +28,8 @@
 
 IotMesurable::IotMesurable(const char *moduleId)
     : _port(1883), _lastStatusPublish(0), _lastSystemPublish(0),
-      _lastConfigPublish(0) {
+      _lastConfigPublish(0), _lastAnnouncePublish(0),
+      _announcePublished(false) {
 
   strncpy(_moduleId, moduleId, sizeof(_moduleId) - 1);
   _moduleId[sizeof(_moduleId) - 1] = '\0';
@@ -55,7 +54,7 @@ IotMesurable::IotMesurable(const char *moduleId)
   _mqtt = new MqttClient();
   _config = new ConfigManager();
 
-  _mqtt->setClientId(_moduleId);
+  _mqtt->setClientId(_chipId);
 }
 
 IotMesurable::~IotMesurable() {
@@ -90,6 +89,7 @@ bool IotMesurable::begin() {
   _mqtt->onConnect([this](bool connected) {
     if (connected) {
       setupSubscriptions();
+      publishAnnounce();
     }
     if (_onConnect) {
       _onConnect(connected);
@@ -131,6 +131,7 @@ bool IotMesurable::begin(const char *ssid, const char *password) {
   _mqtt->onConnect([this](bool connected) {
     if (connected) {
       setupSubscriptions();
+      publishAnnounce();
     }
     if (_onConnect) {
       _onConnect(connected);
@@ -232,10 +233,10 @@ void IotMesurable::publish(const char *hardwareKey, const char *sensorType,
   // Update registry
   _registry->updateSensorValue(hardwareKey, sensorType, value);
 
-  // Build topic: moduleId/hardware/sensor
+  // Build topic: mesurable/{chipId}/data/{hardware}/{sensor}
   char topic[128];
-  snprintf(topic, sizeof(topic), "%s/%s/%s", _moduleId, hardwareKey,
-           sensorType);
+  snprintf(topic, sizeof(topic), "mesurable/%s/data/%s/%s", _chipId,
+           hardwareKey, sensorType);
 
   // Build payload
   char payload[32];
@@ -264,14 +265,40 @@ void IotMesurable::log(const char *level, const char *msg) {
            "{\"level\":\"%s\",\"msg\":\"%s\",\"time\":%lu}", level, msg,
            millis());
 
-  // Publish to moduleId/logs
+  // Publish to mesurable/{chipId}/log
   char topic[128];
-  snprintf(topic, sizeof(topic), "%s/logs", _moduleId);
+  snprintf(topic, sizeof(topic), "mesurable/%s/log", _chipId);
 
   _mqtt->publish(topic, buffer, false);
 }
 
 void IotMesurable::publishStatusNow() { publishStatus(); }
+
+void IotMesurable::publishAnnounce() {
+#ifndef NATIVE_BUILD
+  if (!isConnected())
+    return;
+
+  // Build hardware array from registry
+  char hardwareJson[1024];
+  _registry->buildAnnounceHardwareJson(hardwareJson, sizeof(hardwareJson));
+
+  // Build full announce JSON
+  char buffer[1536];
+  snprintf(buffer, sizeof(buffer),
+           "{\"type\":\"%s\",\"moduleId\":\"%s\",\"firmware\":\"1.0.0\","
+           "\"hardware\":%s}",
+           _moduleType, _moduleId, hardwareJson);
+
+  // Publish to mesurable/{chipId}/announce (retained)
+  char topic[128];
+  snprintf(topic, sizeof(topic), "mesurable/%s/announce", _chipId);
+
+  _mqtt->publish(topic, buffer, true);
+  _announcePublished = true;
+  _lastAnnouncePublish = millis();
+#endif
+}
 
 // =============================================================================
 // Main Loop
@@ -302,6 +329,11 @@ void IotMesurable::loop() {
   if (now - _lastConfigPublish >= CONFIG_INTERVAL) {
     _lastConfigPublish = now;
     publishConfig();
+  }
+
+  // Re-publish announce periodically (heartbeat)
+  if (now - _lastAnnouncePublish >= ANNOUNCE_INTERVAL) {
+    publishAnnounce();
   }
 }
 
@@ -357,9 +389,9 @@ void IotMesurable::publishStatus() {
            "{\"moduleId\":\"%s\",\"moduleType\":\"%s\",\"sensors\":%s}",
            _moduleId, _moduleType, sensorsBuffer);
 
-  // Publish to moduleId/sensors/status
+  // Publish to mesurable/{chipId}/status
   char topic[128];
-  snprintf(topic, sizeof(topic), "%s/sensors/status", _moduleId);
+  snprintf(topic, sizeof(topic), "mesurable/%s/status", _chipId);
 
   _mqtt->publish(topic, fullBuffer, true);
 }
@@ -372,9 +404,9 @@ void IotMesurable::publishConfig() {
   char configBuffer[1024];
   _registry->buildConfigJson(configBuffer, sizeof(configBuffer));
 
-  // Publish to moduleId/sensors/config
+  // Publish to mesurable/{chipId}/config
   char topic[128];
-  snprintf(topic, sizeof(topic), "%s/sensors/config", _moduleId);
+  snprintf(topic, sizeof(topic), "mesurable/%s/config", _chipId);
 
   _mqtt->publish(topic, configBuffer, true);
 }
@@ -450,9 +482,9 @@ void IotMesurable::publishSystemInfo() {
            (unsigned long)flashSketchSize, (unsigned long)flashFreeSketch,
            rssi);
 
-  // Publish to moduleId/system/config
+  // Publish to mesurable/{chipId}/system
   char topic[128];
-  snprintf(topic, sizeof(topic), "%s/system/config", _moduleId);
+  snprintf(topic, sizeof(topic), "mesurable/%s/system", _chipId);
   _mqtt->publish(topic, buffer, true);
 #endif
 }
@@ -502,9 +534,9 @@ void IotMesurable::publishHardwareInfo() {
            "\"flashKb\":%d,\"cores\":%d}}",
            chipModel, rev, cpuFreq, flashKb, cores);
 
-  // Publish to moduleId/hardware/config
+  // Publish to mesurable/{chipId}/hardware
   char topic[128];
-  snprintf(topic, sizeof(topic), "%s/hardware/config", _moduleId);
+  snprintf(topic, sizeof(topic), "mesurable/%s/hardware", _chipId);
   _mqtt->publish(topic, buffer, true);
 #endif
 }
@@ -513,18 +545,19 @@ void IotMesurable::handleMqttMessage(const char *topic, const char *payload) {
 #ifndef NATIVE_BUILD
   // Parse topic to extract message type
   // Expected formats:
-  //   moduleId/sensors/config  - configuration update
-  //   moduleId/sensors/enable  - enable/disable hardware
+  //   mesurable/{chipId}/config  - configuration update
+  //   mesurable/{chipId}/enable  - enable/disable hardware
+  //   mesurable/{chipId}/reset   - reset hardware
 
   char expectedConfigTopic[128];
   char expectedEnableTopic[128];
   char expectedResetTopic[128];
   snprintf(expectedConfigTopic, sizeof(expectedConfigTopic),
-           "%s/sensors/config", _moduleId);
+           "mesurable/%s/config", _chipId);
   snprintf(expectedEnableTopic, sizeof(expectedEnableTopic),
-           "%s/sensors/enable", _moduleId);
-  snprintf(expectedResetTopic, sizeof(expectedResetTopic), "%s/sensors/reset",
-           _moduleId);
+           "mesurable/%s/enable", _chipId);
+  snprintf(expectedResetTopic, sizeof(expectedResetTopic), "mesurable/%s/reset",
+           _chipId);
 
   if (strcmp(topic, expectedConfigTopic) == 0) {
     Serial.printf("[MQTT] Config received on topic: %s\n", topic);
@@ -600,14 +633,14 @@ void IotMesurable::setupSubscriptions() {
   char topic[128];
 
   // Subscribe to config topic
-  snprintf(topic, sizeof(topic), "%s/sensors/config", _moduleId);
+  snprintf(topic, sizeof(topic), "mesurable/%s/config", _chipId);
   _mqtt->subscribe(topic);
 
   // Subscribe to enable topic
-  snprintf(topic, sizeof(topic), "%s/sensors/enable", _moduleId);
+  snprintf(topic, sizeof(topic), "mesurable/%s/enable", _chipId);
   _mqtt->subscribe(topic);
 
   // Subscribe to reset topic
-  snprintf(topic, sizeof(topic), "%s/sensors/reset", _moduleId);
+  snprintf(topic, sizeof(topic), "mesurable/%s/reset", _chipId);
   _mqtt->subscribe(topic);
 }

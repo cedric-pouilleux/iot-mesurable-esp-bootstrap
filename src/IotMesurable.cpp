@@ -242,7 +242,7 @@ void IotMesurable::publish(const char *hardwareKey, const char *sensorType,
   char payload[32];
   snprintf(payload, sizeof(payload), "%.2f", value);
 
-  _mqtt->publish(topic, payload, false);
+  _mqtt->publish(topic, payload, false, 1); // QoS 1 for sensor data
 
   // Update timestamp only if not already updated this millisecond
   if (now != lastPublish) {

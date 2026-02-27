@@ -104,6 +104,8 @@ private:
   char _clientId[64];
   char _username[64];
   char _password[64];
+  char _willTopicBuf[128];
+  char _willPayloadBuf[128];
   uint16_t _port;
   bool _connected;
   unsigned long _lastReconnectAttempt;

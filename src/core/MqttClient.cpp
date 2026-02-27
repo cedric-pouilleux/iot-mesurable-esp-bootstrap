@@ -55,8 +55,14 @@ void MqttClient::setCredentials(const char *username, const char *password) {
 
 void MqttClient::setWill(const char *topic, const char *payload, uint8_t qos,
                          bool retain) {
+  // Copy into persistent buffers — AsyncMqttClient stores raw pointers
+  strncpy(_willTopicBuf, topic, sizeof(_willTopicBuf) - 1);
+  _willTopicBuf[sizeof(_willTopicBuf) - 1] = '\0';
+  strncpy(_willPayloadBuf, payload, sizeof(_willPayloadBuf) - 1);
+  _willPayloadBuf[sizeof(_willPayloadBuf) - 1] = '\0';
+
 #ifndef NATIVE_BUILD
-  _client.setWill(topic, qos, retain, payload);
+  _client.setWill(_willTopicBuf, qos, retain, _willPayloadBuf);
 #endif
 }
 

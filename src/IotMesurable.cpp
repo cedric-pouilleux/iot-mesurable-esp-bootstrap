@@ -85,9 +85,13 @@ bool IotMesurable::begin() {
     setBroker(_config->getBroker(), _config->getPort());
   }
 
-  // Setup MQTT callbacks and connect
   _mqtt->onConnect([this](bool connected) {
     if (connected) {
+      // Publish online status (retain)
+      char onlineTopic[128];
+      snprintf(onlineTopic, sizeof(onlineTopic), "mesurable/%s/online",
+               _chipId);
+      _mqtt->publish(onlineTopic, "{\"online\":true}", true, 1);
       setupSubscriptions();
       publishAnnounce();
     }
@@ -108,6 +112,11 @@ bool IotMesurable::begin() {
 
   // Allow WiFi stack to stabilize
   delay(1000);
+
+  // Set LWT before connecting
+  char willTopic[128];
+  snprintf(willTopic, sizeof(willTopic), "mesurable/%s/online", _chipId);
+  _mqtt->setWill(willTopic, "{\"online\":false}", 1, true);
 
   return _mqtt->connect();
 }
@@ -130,6 +139,11 @@ bool IotMesurable::begin(const char *ssid, const char *password) {
 
   _mqtt->onConnect([this](bool connected) {
     if (connected) {
+      // Publish online status (retain)
+      char onlineTopic[128];
+      snprintf(onlineTopic, sizeof(onlineTopic), "mesurable/%s/online",
+               _chipId);
+      _mqtt->publish(onlineTopic, "{\"online\":true}", true, 1);
       setupSubscriptions();
       publishAnnounce();
     }
@@ -147,6 +161,11 @@ bool IotMesurable::begin(const char *ssid, const char *password) {
   ArduinoOTA.setHostname(_moduleId);
   ArduinoOTA.begin();
 #endif
+
+  // Set LWT before connecting
+  char willTopic[128];
+  snprintf(willTopic, sizeof(willTopic), "mesurable/%s/online", _chipId);
+  _mqtt->setWill(willTopic, "{\"online\":false}", 1, true);
 
   return _mqtt->connect();
 }

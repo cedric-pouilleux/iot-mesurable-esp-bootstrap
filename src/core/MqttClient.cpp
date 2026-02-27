@@ -53,6 +53,13 @@ void MqttClient::setCredentials(const char *username, const char *password) {
 #endif
 }
 
+void MqttClient::setWill(const char *topic, const char *payload, uint8_t qos,
+                         bool retain) {
+#ifndef NATIVE_BUILD
+  _client.setWill(topic, qos, retain, payload);
+#endif
+}
+
 bool MqttClient::connect() {
   if (strlen(_host) == 0)
     return false;

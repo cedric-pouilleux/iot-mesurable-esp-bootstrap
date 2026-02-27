@@ -47,6 +47,16 @@ public:
   bool connect();
 
   /**
+   * @brief Set Last Will and Testament (LWT)
+   * @param topic Will topic
+   * @param payload Will payload
+   * @param qos Will QoS
+   * @param retain Whether will message is retained
+   */
+  void setWill(const char *topic, const char *payload, uint8_t qos = 1,
+               bool retain = true);
+
+  /**
    * @brief Disconnect from broker
    */
   void disconnect();
